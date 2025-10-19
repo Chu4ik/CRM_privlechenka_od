@@ -98,7 +98,7 @@ class Database:
     def create_new_receipt(self, supplier_id, user_id):
         """Создание заголовка нового документа Прихода."""
         query = """
-        INSERT INTO Приходы (поставщик_id, пользователь_id)
+        INSERT INTO Приходы (поставщик_id, завсклада_id)
         VALUES (%s, %s)
         RETURNING id;
         """
@@ -109,29 +109,45 @@ class Database:
     def add_receipt_line(self, receipt_id, item_id, quantity, price):
         """Добавление строки в документ Прихода."""
         query = """
-        INSERT INTO СтрокиПрихода (приход_id, номенклатура_id, количество, цена)
+        INSERT INTO СтрокиПрихода (приход_id, номенклатура_id, количество, цена_закупки)
         VALUES (%s, %s, %s, %s);
         """
         return self.execute_query(query, (receipt_id, item_id, quantity, price))
 
     def update_inventory(self, item_id, quantity, price):
-        """Обновление остатков на складе и средней цены закупки."""
-        # 1. Сначала пытаемся обновить существующую запись
+        
+        # Використовуємо коректну назву стовпця "середня_ціна_закупівлі"
         update_query = """
         UPDATE ОстаткиСклада 
-        SET количество = количество + %s,
-            средняя_цена_закупки = ((средняя_цена_закупки * количество) + (%s * %s)) / (количество + %s)
+        SET количество_на_складе = количество_на_складе + %s,
+            середня_ціна_закупівлі = ((середня_ціна_закупівлі * количество_на_складе) + (%s * %s)) / (количество_на_складе + %s)
         WHERE номенклатура_id = %s;
         """
         rows_updated = self.execute_query(update_query, (quantity, price, quantity, quantity, item_id))
         
-        # 2. Если запись не была обновлена (товара нет в остатках), вставляем новую
+        # Вставка нової номенклатури
         if rows_updated == 0:
             insert_query = """
-            INSERT INTO ОстаткиСклада (номенклатура_id, количество, средняя_цена_закупки)
+            INSERT INTO ОстаткиСклада (номенклатура_id, количество_на_складе, середня_ціна_закупівлі)
             VALUES (%s, %s, %s);
             """
             self.execute_query(insert_query, (item_id, quantity, price))
         
-        # Если вы используете RETURNING, здесь может потребоваться дополнительная логика
         return True
+    
+    def register_initial_debt(self, receipt_id): # <--- Прибираємо supplier_id з параметрів
+        query = """
+        INSERT INTO ЗадолженностиПоставщикам (приход_id, сумма_задолженности, сумма_оплачено, статус)
+        VALUES (%s, 0, 0, 'не оплачено')
+        """
+        # Зверніть увагу: використовуємо лише receipt_id для вставки
+        self.execute_query(query, (receipt_id,))
+
+    def update_debt_amount(self, receipt_id, line_amount):
+        """Збільшує суму заборгованості на суму нового рядка."""
+        query = """
+        UPDATE ЗадолженностиПоставщикам
+        SET сумма_задолженности = сумма_задолженности + %s
+        WHERE приход_id = %s
+        """
+        self.execute_query(query, (line_amount, receipt_id))
